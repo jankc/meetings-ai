@@ -4,8 +4,9 @@
 // overwriting outputs), and uses peek-then-commit so a crash mid-job replays cleanly.
 import type { Config } from "./config.ts";
 import type { Queue, QueueItem } from "./queue.ts";
+import { basename } from "node:path";
 import { artifactsFor } from "./paths.ts";
-import { move } from "./recordings.ts";
+import { move, currentAudioFor } from "./recordings.ts";
 import type { Recorder } from "./recorder.ts";
 import { PauseStore, writeCurrent, clearCurrent, readCurrent } from "./jobstate.ts";
 import { transcribe } from "./engines/asr.ts";
@@ -79,8 +80,19 @@ export class Worker {
     }
   }
 
-  private async runOne(job: QueueItem): Promise<void> {
+  /** Re-resolve the job's recording from its folder at process time (see `currentAudioFor`), so a
+   *  recording edited while queued is processed on the first run rather than failing on the stale
+   *  queued path. Logs when the resolved file differs from what was queued. */
+  private async resolveAudio(job: QueueItem): Promise<QueueItem> {
+    const fresh = await currentAudioFor(this.cfg, job.basename, job.wavPath);
+    if (fresh === job.wavPath) return job;
+    log.info("worker", `${job.basename}: recording resolved to ${basename(fresh)} (queued as ${basename(job.wavPath)})`);
+    return { ...job, wavPath: fresh };
+  }
+
+  private async runOne(queued: QueueItem): Promise<void> {
     const ac = new AbortController();
+    const job = await this.resolveAudio(queued);
     this.current = { ac, job };
     try {
       // The job is in inbox/<base>/ → process it unconditionally, overwriting any prior outputs.

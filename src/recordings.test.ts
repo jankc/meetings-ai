@@ -1,11 +1,11 @@
 // Folder-based locate / resolveWav / move — the folder-as-state lifecycle, against a throwaway
 // temp $MEETINGS_BASE. A recording is a folder named by its basename holding recording.<ext>.
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPaths } from "./paths.ts";
-import { locate, resolveWav, move, recordingFileIn, recordingBase, isManagedRecording } from "./recordings.ts";
+import { locate, resolveWav, move, recordingFileIn, folderAudio, currentAudioFor, recordingBase, isManagedRecording } from "./recordings.ts";
 import type { Config } from "./config.ts";
 
 let base: string;
@@ -67,6 +67,86 @@ describe("recordingFileIn / resolveWav", () => {
 
   test("resolveWav returns null for an unknown basename", async () => {
     expect(await resolveWav(cfg, "meeting-nope")).toBeNull();
+  });
+});
+
+describe("folderAudio", () => {
+  test("finds the single recording regardless of extension", async () => {
+    const folder = await makeRecording(cfg.paths.inboxDir, STAMP, ".m4a");
+    expect(await folderAudio(folder)).toBe(join(folder, "recording.m4a"));
+  });
+
+  test("finds an audio file saved under a different name (not the recording.<ext> stem)", async () => {
+    const folder = join(cfg.paths.inboxDir, STAMP);
+    mkdirSync(folder, { recursive: true });
+    await Bun.write(join(folder, "trimmed.m4a"), "audio-bytes"); // a QuickTime "save as"
+    expect(await folderAudio(folder)).toBe(join(folder, "trimmed.m4a"));
+  });
+
+  test("prefers the newest audio when a trimmed copy sits beside the untrimmed original", async () => {
+    const folder = join(cfg.paths.inboxDir, STAMP);
+    mkdirSync(folder, { recursive: true });
+    const orig = join(folder, "recording.flac");
+    const trimmed = join(folder, "recording.m4a");
+    await Bun.write(orig, "old-untrimmed");
+    await Bun.write(trimmed, "new-trimmed");
+    // Make the flac older and the m4a newer, deterministically (don't rely on write order).
+    utimesSync(orig, new Date(1_000_000), new Date(1_000_000));
+    utimesSync(trimmed, new Date(2_000_000), new Date(2_000_000));
+    expect(await folderAudio(folder)).toBe(trimmed);
+  });
+
+  test("ignores non-audio artifacts and returns null when there's no audio", async () => {
+    const folder = join(cfg.paths.inboxDir, STAMP);
+    mkdirSync(folder, { recursive: true });
+    await Bun.write(join(folder, "transcript.txt"), "hello");
+    await Bun.write(join(folder, "summary.md"), "# x");
+    expect(await folderAudio(folder)).toBeNull();
+  });
+
+  test("returns null for a missing folder", async () => {
+    expect(await folderAudio(join(cfg.paths.inboxDir, "meeting-nope"))).toBeNull();
+  });
+
+  test("resolveWav resolves a trim-renamed recording by basename", async () => {
+    const folder = join(cfg.paths.inboxDir, STAMP);
+    mkdirSync(folder, { recursive: true });
+    await Bun.write(join(folder, "trimmed.m4a"), "audio-bytes");
+    expect(await resolveWav(cfg, STAMP)).toBe(join(folder, "trimmed.m4a"));
+  });
+});
+
+describe("currentAudioFor (worker re-resolution)", () => {
+  test("resolves a job queued as recording.flac to the trimmed recording.m4a now on disk", async () => {
+    const folder = await makeRecording(cfg.paths.inboxDir, STAMP, ".m4a"); // the re-saved file
+    const stalePath = join(folder, "recording.flac"); // what the queue froze; now missing
+    expect(await currentAudioFor(cfg, STAMP, stalePath)).toBe(join(folder, "recording.m4a"));
+  });
+
+  test("resolves a trim saved under a different name (not the recording.<ext> stem)", async () => {
+    const folder = join(cfg.paths.inboxDir, STAMP);
+    mkdirSync(folder, { recursive: true });
+    await Bun.write(join(folder, "trimmed.m4a"), "audio-bytes");
+    const stalePath = join(folder, "recording.flac");
+    expect(await currentAudioFor(cfg, STAMP, stalePath)).toBe(join(folder, "trimmed.m4a"));
+  });
+
+  test("leaves a normal, unedited recording's queued path unchanged", async () => {
+    const folder = await makeRecording(cfg.paths.inboxDir, STAMP);
+    const flac = join(folder, "recording.flac");
+    expect(await currentAudioFor(cfg, STAMP, flac)).toBe(flac);
+  });
+
+  test("falls back to the queued path when the folder has no audio (never invents a file)", async () => {
+    const folder = join(cfg.paths.inboxDir, STAMP);
+    mkdirSync(folder, { recursive: true }); // empty
+    const stalePath = join(folder, "recording.flac");
+    expect(await currentAudioFor(cfg, STAMP, stalePath)).toBe(stalePath);
+  });
+
+  test("leaves an external one-off path untouched (not resolved by basename)", async () => {
+    const external = "/tmp/somewhere/audio.m4a";
+    expect(await currentAudioFor(cfg, "audio", external)).toBe(external);
   });
 });
 

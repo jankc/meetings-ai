@@ -15,7 +15,7 @@ import { transcribe } from "./engines/asr.ts";
 import { summarize } from "./engines/ollama.ts";
 import { archiveSummary } from "./archive.ts";
 import { type QueueItem } from "./queue.ts";
-import { resolveWav, recordingFileIn, recordingBase, isManagedRecording, move } from "./recordings.ts";
+import { resolveWav, folderAudio, recordingBase, isManagedRecording, move } from "./recordings.ts";
 import { runImport } from "./import.ts";
 import { purge } from "./purge.ts";
 import { EngineError } from "./engines/errors.ts";
@@ -552,8 +552,9 @@ switch (cmd) {
     const stillFailing: string[] = [];
     for (const n of names) {
       // Don't let one bad recording (inline path) abort the rest — catch, continue, report.
-      // Dispatch the in-folder recording file (it keeps its real extension — could be .wav/.m4a).
-      const rec = await recordingFileIn(join(cfg.paths.failedDir, n));
+      // Dispatch the in-folder recording file (any name/extension — a manual trim may have
+      // re-saved it as .m4a or under a new name; folderAudio finds it, newest-wins if duplicated).
+      const rec = await folderAudio(join(cfg.paths.failedDir, n));
       if (!rec) {
         stillFailing.push(n);
         console.error(`  ✗ ${n}: no recording file in failed/${n}/`);

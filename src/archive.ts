@@ -12,7 +12,7 @@ import type { Config } from "./config.ts";
 import { generateTitle, EMPTY_MARKER, type TriageType } from "./engines/ollama.ts";
 import { isAbort } from "./engines/errors.ts";
 import { parseStamp, stampFromDate } from "./stamp.ts";
-import { recordingFileIn } from "./recordings.ts";
+import { folderAudio } from "./recordings.ts";
 import { ARTIFACTS, CANONICAL_AUDIO_EXT } from "./paths.ts";
 import { probeDurationSeconds } from "./ffprobe.ts";
 import { pad } from "./util.ts";
@@ -61,7 +61,7 @@ export async function archiveSummary(
   // Resolve the in-folder recording once — for the duration and the frontmatter source pointer
   // (a recording murmur produced is recording.flac; an imported one keeps its own extension). The
   // source points into the recordings tree as <base>/<recording.<ext>>.
-  const audioPath = await recordingFileIn(folder);
+  const audioPath = await folderAudio(folder);
   const sourceName = `${base}/${audioPath ? basename(audioPath) : ARTIFACTS.recording(CANONICAL_AUDIO_EXT)}`;
   const speakers = await countSpeakers(join(folder, ARTIFACTS.transcript));
   const duration = audioPath ? await durationOf(cfg, audioPath) : null;
