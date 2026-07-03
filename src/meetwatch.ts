@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { Subprocess } from "bun";
 import type { Config } from "./config.ts";
 import type { Recorder } from "./recorder.ts";
-import { notify } from "./notify.ts";
+import { notify, shq } from "./notify.ts";
 import { setMeetingDetected, clearMeetingDetected } from "./jobstate.ts";
 import { log } from "./log.ts";
 import { sleep } from "./util.ts";
@@ -60,12 +60,6 @@ export function shouldNudge(args: {
   if (!args.armed) return false; // at most one nudge per call
   if (args.lastStopAt && args.now - args.lastStopAt < args.cooldownMs) return false; // post-stop cooldown
   return true;
-}
-
-/** Single-quote a value for safe interpolation into the `/bin/sh -c` command terminal-notifier
- *  runs for `-execute` (the only metachar inside '' is '). */
-function shq(s: string): string {
-  return `'${s.replaceAll("'", `'\\''`)}'`;
 }
 
 // ── Watcher ─────────────────────────────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@ import { summarize, EMPTY_MARKER } from "./engines/ollama.ts";
 import { archiveSummary } from "./archive.ts";
 import { EngineError, isAbort } from "./engines/errors.ts";
 import { logFailure } from "./failures.ts";
-import { notify } from "./notify.ts";
+import { notify, openInFinderCmd } from "./notify.ts";
 import { log } from "./log.ts";
 
 const IDLE_POLL_MS = 5000;
@@ -128,14 +128,18 @@ export class Worker {
       // queued-but-already-moved, which would retry a now-missing path and misfile a completed
       // job into failed/.
       await this.queue.commitDequeue(job.basename);
-      await move(this.cfg, job.basename, "processed");
+      const dest = await move(this.cfg, job.basename, "processed");
       await clearCurrent(this.cfg);
+      // Clicking the banner opens the processed folder in Finder (its recording/transcript/summary).
+      // `move` returns null only if the folder couldn't be relocated — then omit the action rather
+      // than point "Show" at a path that isn't there.
+      const opts = dest ? { execute: openInFinderCmd(dest) } : {};
       if (summaryText.trimStart().startsWith(EMPTY_MARKER)) {
         log.warn("worker", `${job.basename}: no speech detected — empty summary, no vault note`);
-        notify(this.cfg, `⚠️ ${job.basename}: no speech detected (empty recording)`);
+        notify(this.cfg, `⚠️ ${job.basename}: no speech detected (empty recording)`, opts);
       } else {
         log.info("worker", `completed ${job.basename}`);
-        notify(this.cfg, `Summary ready: ${job.basename}`);
+        notify(this.cfg, `Summary ready: ${job.basename}`, opts);
       }
     } catch (err) {
       if (isAbort(err) || ac.signal.aborted) {
