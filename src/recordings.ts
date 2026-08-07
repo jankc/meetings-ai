@@ -9,7 +9,7 @@ import { statSync } from "node:fs";
 import { cp, mkdir, readdir, rename, rm } from "node:fs/promises";
 import { basename as pathBasename, dirname, isAbsolute, join } from "node:path";
 import type { Config } from "./config.ts";
-import { ARTIFACTS, KNOWN_AUDIO_EXTS, isRecordingFile, stripAudioExt } from "./paths.ts";
+import { isRecordingFile, stripAudioExt } from "./paths.ts";
 import { monthOf } from "./stamp.ts";
 import { log } from "./log.ts";
 
@@ -43,51 +43,51 @@ export async function locate(cfg: Config, base: string): Promise<string | null> 
   return null;
 }
 
-/** The recording audio file (`recording.<ext>`) inside a folder, or null. Imports keep their
- *  original extension, so probe each known ext (case-sensitive, lowercase — see paths.ts). */
-export async function recordingFileIn(folder: string): Promise<string | null> {
-  for (const ext of KNOWN_AUDIO_EXTS) {
-    const p = join(folder, ARTIFACTS.recording(ext));
-    if (await Bun.file(p).exists()) return p;
-  }
-  return null;
-}
-
-/** The recording audio in a folder — ANY single `KNOWN_AUDIO_EXTS` file, not just the
- *  `recording.<ext>` stem, so a recording trimmed and re-saved under a different name/extension
- *  (e.g. a QuickTime "save as" → `trimmed.m4a`, or `flac`→`m4a`) is still found. When several
- *  audio files coexist — the classic case being a trimmed copy left beside the untrimmed original
- *  — the most recently modified one wins (that's the edit the user just made) and the stale
- *  sibling(s) are logged so the choice is visible. Returns the path, or null if the folder holds
- *  no audio (or is gone). The folder's other artifacts (transcript.txt, summary.md, asr.log,
- *  context.md) are non-audio and excluded by the extension filter. */
-export async function folderAudio(folder: string): Promise<string | null> {
+/** Every audio file in a folder, newest mtime first — empty when the folder holds no audio (or is
+ *  gone / not a directory). This is THE rule for what a folder's recording is, and it is deliberately
+ *  name-agnostic: ANY `KNOWN_AUDIO_EXTS` file counts, not just the `recording.<ext>` stem, so a
+ *  recording trimmed and re-saved under a different name/extension (a QuickTime "save as" →
+ *  `trimmed.m4a`) or a hand-split half dropped in as `part-2.m4a` is found. When several audio files
+ *  coexist — the classic case being a trimmed copy left beside the untrimmed original — the most
+ *  recently modified one leads, because that's the edit the user just made. The folder's other
+ *  artifacts (transcript.txt, summary.md, asr.log, context.md) are non-audio and excluded by the
+ *  extension filter. One-shot callers should prefer `folderAudio`, which also logs the choice;
+ *  pollers (the watcher's stability loop) take `[0]` from here so that log isn't repeated every
+ *  couple of seconds. */
+export async function folderAudioRanked(folder: string): Promise<string[]> {
   let names: string[];
   try {
     names = (await readdir(folder)).filter((n) => !n.startsWith(".") && isRecordingFile(n));
   } catch {
-    return null; // folder gone
+    return []; // folder gone (or not a directory)
   }
   // Newest mtime wins; a failed stat sorts last (mtime 0) so it's never chosen over a readable
   // file. Ties (rare) keep readdir order, deterministic enough here.
-  const ranked = names
+  return names
     .map((n) => {
       const p = join(folder, n);
       let mtimeMs = 0;
       try { mtimeMs = statSync(p).mtimeMs; } catch { /* unreadable → sorts last */ }
       return { p, mtimeMs };
     })
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .map((r) => r.p);
+}
+
+/** The recording audio in a folder (see `folderAudioRanked` for the rule), or null if it holds no
+ *  audio. The losing sibling(s) are logged so the choice is visible — this is the one-shot resolve
+ *  the worker and CLI use, where explaining "we used the trimmed copy, not the original" matters. */
+export async function folderAudio(folder: string): Promise<string | null> {
+  const ranked = await folderAudioRanked(folder);
   const winner = ranked[0];
   if (!winner) return null; // no audio in the folder
-  const stale = ranked.slice(1);
-  if (stale.length > 0) {
+  if (ranked.length > 1) {
     log.warn(
       "recordings",
-      `${pathBasename(folder)}: ${ranked.length} audio files — using newest ${pathBasename(winner.p)}, ignoring ${stale.map((s) => pathBasename(s.p)).join(", ")}`,
+      `${pathBasename(folder)}: ${ranked.length} audio files — using newest ${pathBasename(winner)}, ignoring ${ranked.slice(1).map((p) => pathBasename(p)).join(", ")}`,
     );
   }
-  return winner.p;
+  return winner;
 }
 
 /** If `recordingFile` is a managed recording — a `recording.<ext>` directly inside a lifecycle

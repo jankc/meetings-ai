@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync, existsSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPaths } from "./paths.ts";
-import { locate, resolveWav, move, recordingFileIn, folderAudio, currentAudioFor, recordingBase, isManagedRecording } from "./recordings.ts";
+import { locate, resolveWav, move, folderAudio, folderAudioRanked, currentAudioFor, recordingBase, isManagedRecording } from "./recordings.ts";
 import type { Config } from "./config.ts";
 
 let base: string;
@@ -48,12 +48,7 @@ describe("locate", () => {
   });
 });
 
-describe("recordingFileIn / resolveWav", () => {
-  test("recordingFileIn preserves the original extension", async () => {
-    const folder = await makeRecording(cfg.paths.inboxDir, STAMP, ".m4a");
-    expect(await recordingFileIn(folder)).toBe(join(folder, "recording.m4a"));
-  });
-
+describe("resolveWav", () => {
   test("resolveWav resolves a bare basename to the in-folder recording file", async () => {
     const folder = await makeRecording(join(cfg.paths.processedDir, "2026-06"), STAMP);
     expect(await resolveWav(cfg, STAMP)).toBe(join(folder, "recording.flac"));
@@ -106,6 +101,30 @@ describe("folderAudio", () => {
 
   test("returns null for a missing folder", async () => {
     expect(await folderAudio(join(cfg.paths.inboxDir, "meeting-nope"))).toBeNull();
+  });
+
+  // folderAudioRanked is what the watcher polls (quietly); folderAudio is the logging one-shot.
+  // Both must agree on the winner, or a folder could be enqueued as one file and processed as
+  // another.
+  test("folderAudioRanked ranks newest-first and leads with folderAudio's pick", async () => {
+    const folder = join(cfg.paths.inboxDir, STAMP);
+    mkdirSync(folder, { recursive: true });
+    const orig = join(folder, "recording.flac");
+    const split = join(folder, "part-2.m4a");
+    await Bun.write(orig, "old");
+    await Bun.write(split, "new");
+    utimesSync(orig, new Date(1_000_000), new Date(1_000_000));
+    utimesSync(split, new Date(2_000_000), new Date(2_000_000));
+    expect(await folderAudioRanked(folder)).toEqual([split, orig]);
+    expect(await folderAudio(folder)).toBe(split);
+  });
+
+  test("folderAudioRanked is empty for a folder with no audio and for a missing folder", async () => {
+    const folder = join(cfg.paths.inboxDir, STAMP);
+    mkdirSync(folder, { recursive: true });
+    await Bun.write(join(folder, "transcript.txt"), "hello");
+    expect(await folderAudioRanked(folder)).toEqual([]);
+    expect(await folderAudioRanked(join(cfg.paths.inboxDir, "meeting-nope"))).toEqual([]);
   });
 
   test("resolveWav resolves a trim-renamed recording by basename", async () => {

@@ -70,8 +70,18 @@ recording's basename to the caller. The importer MUST keep its existing dedup gu
 ### Requirement: Watcher detects a complete recording inside a new folder
 
 The daemon watcher SHALL enqueue a recording when a new `inbox/<base>/` folder contains a complete,
-size-stable `recording.<ext>`, rather than watching for bare audio files at the inbox root. A
-folder whose `recording.<ext>` is still growing MUST NOT be enqueued until it stabilizes.
+size-stable audio file, rather than watching for bare audio files at the inbox root. A folder whose
+audio is still growing MUST NOT be enqueued until it stabilizes.
+
+The watcher (both the live watch and the boot reconcile) MUST identify a folder's audio by the same
+rule the pipeline applies when it re-resolves a job at process time — any file with a supported
+audio extension, most recently modified wins — and MUST NOT require the `recording.<ext>` stem. A
+stricter gate at the watcher would make a hand-edited folder processable only if it were already
+queued, while never letting it enter the queue.
+
+A folder that never yields a supported audio file within the grace window SHALL be reported rather
+than dropped silently, since nothing re-examines it until the next daemon start. A folder that has
+vanished (moved on to `processed/`, or deleted) is not an anomaly and MUST NOT be reported.
 
 #### Scenario: A stable recording folder is enqueued
 - **WHEN** an `inbox/<base>/recording.flac` stops changing size for the stability window
@@ -80,6 +90,20 @@ folder whose `recording.<ext>` is still growing MUST NOT be enqueued until it st
 #### Scenario: A still-writing recording is not enqueued early
 - **WHEN** `inbox/<base>/recording.flac` is still being written (size changing)
 - **THEN** the watcher does not enqueue `<base>` until the file stabilizes
+
+#### Scenario: A hand-split recording under its own filename is enqueued
+- **WHEN** a user splits one capture into two meetings and drops the second half into a new folder
+  as `inbox/<base>/part-2.m4a` (no `recording.<ext>` present)
+- **THEN** the watcher enqueues `<base>` for processing, and the boot reconcile finds it too
+
+#### Scenario: The newest audio wins when an edit sits beside the original
+- **WHEN** `inbox/<base>/` holds both the original `recording.flac` and a newer trimmed `vsem.m4a`
+- **THEN** the watcher enqueues the recording resolved to `vsem.m4a`
+
+#### Scenario: A folder that yields no audio is reported, a vanished folder is not
+- **WHEN** a folder in `inbox/` still holds no supported audio at the end of the grace window
+- **THEN** the watcher logs a warning naming the folder instead of ignoring it silently
+- **AND** no warning is logged for a folder that was moved to `processed/` or deleted
 
 ### Requirement: Folder-based locate, move, and resolve
 
