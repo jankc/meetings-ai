@@ -82,12 +82,14 @@ fi
 echo
 echo "Applying..."
 cp "$UP_SWIFT" "$CAPTURE_DIR/Sources/AudioCapture.swift"
-echo "  WARNING: overwrote AudioCapture.swift — RE-APPLY the 4 local patches (search 'LOCAL"
+echo "  WARNING: overwrote AudioCapture.swift — RE-APPLY the 5 local patches (search 'LOCAL"
 echo "           PATCH'; see capture/README.md): (1) --max-duration, else 'murmur record' fails"
 echo "           with 'Unknown option: --max-duration'; (2) the request-mic subcommand; (3) the"
 echo "           self-disclaim re-exec — without (2)+(3), menubar recordings silently lose the"
 echo "           mic; and (4) the watch-mic subcommand — without it, meeting auto-detection no-ops"
-echo "           (murmur doctor warns). The build re-signs with the stable identity, so grants persist."
+echo "           (murmur doctor warns); and (5) mic echo cancellation (setVoiceProcessingEnabled) —"
+echo "           without it speaker audio is recorded twice, 30–100 ms apart. The build re-signs with"
+echo "           the stable identity, so grants persist."
 cp "$UP_LICENSE" "$CAPTURE_DIR/LICENSE"
 sed -E -i.bak "s/^commit=.*/commit=$NEW_COMMIT/" "$UPSTREAM_FILE" && rm -f "$UPSTREAM_FILE.bak"
 
@@ -98,5 +100,5 @@ bash "$CAPTURE_DIR/build.sh"
 echo
 echo "Done — vendored at $NEW_COMMIT."
 echo "  1. Review:    git diff capture/"
-echo "  2. Reinstall: cp capture/bin/ownscribe-audio ~/.local/bin/ownscribe-audio"
+echo "  2. Reinstall: install -m755 capture/bin/ownscribe-audio ~/.local/bin/ownscribe-audio"
 echo "  3. Commit."

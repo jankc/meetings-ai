@@ -20,7 +20,7 @@ and stops it with SIGINT, then ffmpeg-transcodes the result to 16 kHz s16le.
 - **Pinned commit:** see [`UPSTREAM`](UPSTREAM) — the single source of truth, updated by the sync tooling below
 - **License:** MIT, © 2026 Pascal Berrang — see `LICENSE` (kept per the MIT terms)
 
-`Sources/AudioCapture.swift` tracks upstream with **four local patches** (search the file for
+`Sources/AudioCapture.swift` tracks upstream with **five local patches** (search the file for
 `LOCAL PATCH`):
 
 1. A `--max-duration N` flag (a one-shot timer that fires the normal merge+exit), so a
@@ -45,6 +45,18 @@ and stops it with SIGINT, then ffmpeg-transcodes the result to 16 kHz s16le.
    Screen Recording grants, independent of the launcher. The original process stays as a thin
    supervisor that forwards stop/mute signals (SIGINT/SIGTERM/SIGUSR1) so the recorder's
    pid-tracking and SIGINT-merge-on-stop are unaffected.
+
+5. **Echo cancellation** of speaker audio from the mic. On speakers the mic re-captures the
+   system audio 30–100 ms late (output + input latency, which changes with devices and OS
+   updates), so the merged file carried a second delayed copy of every remote word — host-time
+   sync of the two tracks can't remove that. The mic runs through macOS's voice-processing IO
+   (`AVAudioInputNode.setVoiceProcessingEnabled`), which cancels the device output from the mic
+   signal (~35 dB in testing) and applies noise suppression. Two consequences: the processed input
+   comes out as 9 identical channels, so the mic track is written mono from channel 0; and macOS
+   **ducks other apps by ~8 dB while voice processing is active** (the `.min` ducking level is the
+   floor — there is no off switch), so the meeting sounds quieter to you while a recording runs.
+   If voice processing fails to start the capture falls back to the plain mic and logs a warning;
+   `--no-aec` disables it explicitly.
 
 Because the disclaimed binary is self-responsible, it needs its **own** TCC grants (not the
 launcher's): grant once via **`murmur grant-mic`** (Microphone) and by enabling `ownscribe-audio`
@@ -71,7 +83,7 @@ fails — `build.sh`'s direct `swiftc` call is the real, supported build path.
   and opens an issue when upstream moves past the pinned commit. Delete it if unwanted.
 
 `LICENSE` tracks upstream verbatim. `Sources/AudioCapture.swift` carries the local
-`--max-duration`, `request-mic`, `watch-mic`, and self-disclaim patches and `build.sh` deviates on
+`--max-duration`, `request-mic`, `watch-mic`, self-disclaim, and echo-cancellation patches and `build.sh` deviates on
 `BIN_DIR` + the `Info.plist` embedding + stable code-signing, so after a sync **re-apply the patches**
 (search `LOCAL PATCH`); `scripts/sync-capture.sh` warns about this on `--apply`. If the `--max-duration`
 patch is ever lost, `murmur record` fails loudly with `Unknown option: --max-duration` rather than
@@ -81,13 +93,13 @@ no-ops and `murmur doctor` warns (it never breaks recording). The stable code-si
 the Microphone/Screen Recording grants — but only while the `murmur-ownscribe-codesign` identity
 stays in your keychain; lose it and the build falls back to ad-hoc and the grants reset.
 
-After any sync, redeploy the binary: `cp capture/bin/ownscribe-audio ~/.local/bin/`.
+After any sync, redeploy the binary: `install -m755 capture/bin/ownscribe-audio ~/.local/bin/` (`install` replaces the file rather than overwriting in place — a plain `cp` over the old signed binary gets the new one SIGKILLed by the code-signature cache).
 
 ## Build
 
 ```sh
 bash capture/build.sh                              # → capture/bin/ownscribe-audio
-cp capture/bin/ownscribe-audio ~/.local/bin/       # the default OWNSCRIBE_BIN path
+install -m755 capture/bin/ownscribe-audio ~/.local/bin/       # the default OWNSCRIBE_BIN path
 ```
 
 Requires the Xcode Command Line Tools (`xcode-select --install`) and macOS 14.2+.

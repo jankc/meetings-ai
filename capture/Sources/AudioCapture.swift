@@ -65,8 +65,22 @@ class MicCapture {
         fputs(muted ? "[MIC_MUTED]\n" : "[MIC_UNMUTED]\n", stderr)
     }
 
-    func start(outputPath: String, deviceName: String?) throws {
+    func start(outputPath: String, deviceName: String?, aec: Bool = true) throws {
         let input = engine.inputNode
+
+        // LOCAL PATCH (5): acoustic echo cancellation. On speakers the mic re-captures the
+        // system audio 30–100 ms late (output + input latency, varies per device/OS), so the
+        // merged file carries an echo that host-time sync can't remove. macOS's voice-processing
+        // IO cancels the device output from the mic signal instead (~35 dB measured). Side effect:
+        // macOS ducks other apps while voice processing runs; .min is the floor (~-8 dB, no off
+        // switch — the legacy kAUVoiceIOProperty_DuckNonVoiceAudio is rejected). Escape hatch: --no-aec.
+        if aec {
+            try input.setVoiceProcessingEnabled(true)
+            if #available(macOS 14.0, *) {
+                input.voiceProcessingOtherAudioDuckingConfiguration =
+                    AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
+            }
+        }
 
         // If deviceName specified, find and set the audio device
         if let name = deviceName {
@@ -86,15 +100,25 @@ class MicCapture {
         guard format.sampleRate > 0 else {
             throw MicError.noInputAvailable
         }
+        // Mono file: voice processing exposes the mic as 9 identical channels; keep channel 0.
+        let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate,
+                                       channels: 1, interleaved: false)!
 
         let url = URL(fileURLWithPath: outputPath)
         audioFile = try AVAudioFile(forWriting: url,
-                                     settings: format.settings,
+                                     settings: monoFormat.settings,
                                      commonFormat: .pcmFormatFloat32,
                                      interleaved: true)
 
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, time in
+        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] tapBuffer, time in
             guard let self else { return }
+            var buffer = tapBuffer
+            if tapBuffer.format.channelCount > 1, let src = tapBuffer.floatChannelData,
+               let mono = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: tapBuffer.frameLength) {
+                mono.frameLength = tapBuffer.frameLength
+                memcpy(mono.floatChannelData![0], src[0], Int(tapBuffer.frameLength) * MemoryLayout<Float>.size)
+                buffer = mono
+            }
             if self.startHostTime == 0 {
                 self.startHostTime = time.hostTime
             }
@@ -757,6 +781,7 @@ func printUsage() {
         --output, -o FILE    Output WAV file path (required for capture)
         --mic                Also capture microphone input
         --mic-device NAME    Use specific mic input device (implies --mic)
+        --no-aec             Disable echo cancellation of speaker audio from the mic (on by default)
         --capture-mode-all   Capture all system audio without showing the source picker
         --silence-timeout N  Auto-stop after N seconds of silence (0 = disabled)
         --max-duration N     Auto-stop after N seconds total (0 = disabled)
@@ -1011,6 +1036,7 @@ func main() {
         var outputPath: String?
         var enableMic = false
         var micDeviceName: String?
+        var aec = true
         var captureModeAll = false
         var silenceTimeout: TimeInterval = 0
         var maxDuration: TimeInterval = 0
@@ -1027,6 +1053,8 @@ func main() {
                 outputPath = args[i]
             case "--capture-mode-all":
                 captureModeAll = true
+            case "--no-aec":
+                aec = false
             case "--mic":
                 enableMic = true
             case "--mic-device":
@@ -1083,9 +1111,16 @@ func main() {
         var micCapture: MicCapture?
 
         if enableMic {
-            let mic = MicCapture()
+            var mic = MicCapture()
             do {
-                try mic.start(outputPath: micPath, deviceName: micDeviceName)
+                do {
+                    try mic.start(outputPath: micPath, deviceName: micDeviceName, aec: aec)
+                } catch where aec {
+                    // Never lose a recording to the echo canceller: fall back to the plain mic.
+                    fputs("warning: echo cancellation unavailable (\(error)) — recording mic without it\n", stderr)
+                    mic = MicCapture()
+                    try mic.start(outputPath: micPath, deviceName: micDeviceName, aec: false)
+                }
             } catch {
                 fputs("Error starting mic capture: \(error)\n", stderr)
                 exit(1)

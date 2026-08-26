@@ -120,7 +120,7 @@ mode = "notify"             # off (default) | notify
 How it works (and why it's precise): the ownscribe helper's `watch-mic` subcommand observes a **permission-free** CoreAudio signal (`kAudioDevicePropertyDeviceIsRunningSomewhere` — no Microphone grant, no prompt) and, on a rising edge, reads **which app holds the mic** by bundle id (the macOS 14.4+ process-object API — reads only, never a tap). murmur nudges only when a mic owner is in `apps` and none is in `ignore_apps`. Matching is **prefix-aware**, so an app's audio helper counts too — `com.microsoft.teams2` also matches Teams' `com.microsoft.teams2.modulehost` (the helper that actually opens the mic during a call), and likewise for Slack/Zoom helpers. Because it matches the **mic owner** — not "is some meeting app running" — dictation tools like VoiceInk are ignored even with Teams/Slack idling in the background. Guards prevent spam: a debounce, no nudge while already recording, and a post-stop cooldown; you're nudged at most once per call.
 
 **Enable it:**
-1. Build/refresh the helper so it has `watch-mic`: `bash capture/build.sh && cp capture/bin/ownscribe-audio ~/.local/bin/`
+1. Build/refresh the helper so it has `watch-mic`: `bash capture/build.sh && install -m755 capture/bin/ownscribe-audio ~/.local/bin/`
 2. Set `[autorecord].mode = "notify"` in `murmur.toml`, then `murmur daemon restart`.
 3. Recommended: set **terminal-notifier to "Alerts"** (System Settings ▸ Notifications) so the prompt persists instead of auto-dismissing.
 
@@ -172,7 +172,7 @@ Set `backend` under `[recording]` in `murmur.toml`:
 
 Build the helper once (the Swift source is vendored in [`capture/`](capture/), from [ownscribe](https://github.com/paberr/ownscribe), MIT, macOS 14.2+; needs the Xcode Command Line Tools, `xcode-select --install`; first run prompts for Screen Recording permission):
 ```sh
-bash capture/build.sh && cp capture/bin/ownscribe-audio ~/.local/bin/ownscribe-audio
+bash capture/build.sh && install -m755 capture/bin/ownscribe-audio ~/.local/bin/ownscribe-audio
 ```
 ```toml
 [recording]
