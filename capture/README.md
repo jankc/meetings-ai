@@ -53,7 +53,11 @@ and stops it with SIGINT, then ffmpeg-transcodes the result to 16 kHz s16le.
    300 ms hangover, click-free ramp) wherever the system track is above −40 dBFS, so remote speech
    comes only from the clean system tap. It runs offline and touches nothing on the live audio path —
    macOS voice-processing AEC was tried first and silenced the mic for Teams. Cost: your own words
-   spoken *over* the remote party are muted too. `--no-mic-gate` disables it.
+   spoken *over* the remote party are muted too. `--no-mic-gate` disables it. With `--keep-tracks`
+   the merge also writes the two tracks aligned on the output timeline (`FILE.sys.wav`,
+   `FILE.mic.wav`, 24 kHz mono, mic ungated); murmur's recorder passes it and runs
+   [`asr/aec.py`](../asr/aec.py) — an offline echo canceller (NLMS + residual suppression, ~23 dB)
+   that keeps your words during double-talk — falling back to the gated merge if that fails.
 
 Because the disclaimed binary is self-responsible, it needs its **own** TCC grants (not the
 launcher's): grant once via **`murmur grant-mic`** (Microphone) and by enabling `ownscribe-audio`

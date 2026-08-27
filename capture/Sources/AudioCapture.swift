@@ -605,7 +605,7 @@ func listInputDevices() {
 
 func mergeAudioFiles(systemPath: String, micPath: String,
                      systemStartHostTime: UInt64, micStartHostTime: UInt64,
-                     outputPath: String, micGate: Bool = true) throws {
+                     outputPath: String, micGate: Bool = true, keepTracks: Bool = false) throws {
     // A standard WAV file header (RIFF + fmt + data chunk header) is 44 bytes.
     // Files at or below this size contain no audio frames.
     let wavHeaderSize = 44
@@ -682,6 +682,11 @@ func mergeAudioFiles(systemPath: String, micPath: String,
     // frame; micGain is one-pole smoothed (~8 ms) so the gate doesn't click.
     let gateMap: [Bool] = (micGate && systemFile != nil) ? try micGateMap(systemFile!) : []
     var micGain: Float = 1
+    // --keep-tracks: also write the two tracks aligned on the output timeline (24 kHz mono, mic
+    // ungated) as <output>.sys.wav / <output>.mic.wav for an offline echo canceller downstream.
+    let trackFiles: (sys: AVAudioFile, mic: AVAudioFile)? = keepTracks ? (
+        try AVAudioFile(forWriting: URL(fileURLWithPath: outputPath + ".sys.wav"), settings: outputFormat.settings, commonFormat: .pcmFormatFloat32, interleaved: true),
+        try AVAudioFile(forWriting: URL(fileURLWithPath: outputPath + ".mic.wav"), settings: outputFormat.settings, commonFormat: .pcmFormatFloat32, interleaved: true)) : nil
     if !gateMap.isEmpty {
         let pct = 100 * gateMap.filter { $0 }.count / max(1, gateMap.count)
         fputs("Mic gate: system audio loud in \(pct)% of the recording — mic muted there\n", stderr)
@@ -698,6 +703,13 @@ func mergeAudioFiles(systemPath: String, micPath: String,
         let outPtr = outBuffer.floatChannelData![0]
         for i in 0..<Int(framesToProcess * outputChannels) {
             outPtr[i] = 0
+        }
+        var trackBufs: (sys: AVAudioPCMBuffer, mic: AVAudioPCMBuffer)? = nil
+        if trackFiles != nil, let sb = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: framesToProcess),
+           let mb = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: framesToProcess) {
+            sb.frameLength = framesToProcess; mb.frameLength = framesToProcess
+            memset(sb.floatChannelData![0], 0, Int(framesToProcess) * 4); memset(mb.floatChannelData![0], 0, Int(framesToProcess) * 4)
+            trackBufs = (sb, mb)
         }
 
         // Read and mix system audio (manual interleave from non-interleaved processingFormat)
@@ -719,6 +731,7 @@ func mergeAudioFiles(systemPath: String, micPath: String,
                             var mix: Float = 0
                             for ch in 0..<sysCh { mix += sysData[ch][i] }
                             outPtr[wo + i] += mix / Float(sysCh)
+                            trackBufs?.sys.floatChannelData![0][wo + i] = mix / Float(sysCh)
                         }
                     }
                 }
@@ -774,6 +787,7 @@ func mergeAudioFiles(systemPath: String, micPath: String,
                             micGain += ((gated ? 0 : 1) - micGain) * 0.005
                         }
                         outPtr[offsetInChunk * Int(outputChannels) + i] += srcPtr[i] * micGain
+                        trackBufs?.mic.floatChannelData![0][offsetInChunk + i] = srcPtr[i]
                     }
                 }
             }
@@ -786,6 +800,7 @@ func mergeAudioFiles(systemPath: String, micPath: String,
         }
 
         try outputFile.write(from: outBuffer)
+        if let t = trackFiles, let b = trackBufs { try t.sys.write(from: b.sys); try t.mic.write(from: b.mic) }
         outputFrame += Int64(framesToProcess)
     }
 
@@ -814,6 +829,7 @@ func printUsage() {
         --mic                Also capture microphone input
         --mic-device NAME    Use specific mic input device (implies --mic)
         --no-mic-gate        Keep the mic audible while system audio plays (default: muted there, kills speaker echo)
+        --keep-tracks        Also write FILE.sys.wav + FILE.mic.wav (aligned, 24 kHz mono, mic ungated)
         --capture-mode-all   Capture all system audio without showing the source picker
         --silence-timeout N  Auto-stop after N seconds of silence (0 = disabled)
         --max-duration N     Auto-stop after N seconds total (0 = disabled)
@@ -1069,6 +1085,7 @@ func main() {
         var enableMic = false
         var micDeviceName: String?
         var micGate = true
+        var keepTracks = false
         var captureModeAll = false
         var silenceTimeout: TimeInterval = 0
         var maxDuration: TimeInterval = 0
@@ -1087,6 +1104,8 @@ func main() {
                 captureModeAll = true
             case "--no-mic-gate":
                 micGate = false
+            case "--keep-tracks":
+                keepTracks = true
             case "--mic":
                 enableMic = true
             case "--mic-device":
@@ -1165,7 +1184,7 @@ func main() {
                         micPath: micPath,
                         systemStartHostTime: capture.startHostTime,
                         micStartHostTime: mic.startHostTime,
-                        outputPath: output, micGate: micGate)
+                        outputPath: output, micGate: micGate, keepTracks: keepTracks)
                 } catch {
                     fputs("Error merging audio: \(error)\n", stderr)
                 }

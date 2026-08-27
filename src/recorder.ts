@@ -11,8 +11,9 @@
 // Two backends (RECORD_BACKEND):
 //   ownscribe — one ownscribe-audio process captures system audio (ScreenCaptureKit) + the
 //               mic and, on stop, merges them host-time-aligned. No output routing, so the
-//               macOS volume keys keep working. Writes 24 kHz mono float; finalize transcodes
-//               it to the canonical 16 kHz mono FLAC.
+//               macOS volume keys keep working. Writes 24 kHz mono float; finalize runs
+//               asr/aec.py offline echo cancellation on the separate sys/mic tracks (kept via
+//               --keep-tracks) when available, then transcodes to the canonical 16 kHz mono FLAC.
 //   ffmpeg    — one ffmpeg captures an avfoundation device (e.g. a BlackHole Aggregate
 //               Device) through the pan filter, writing <base>.wav (raw PCM); finalize
 //               transcodes it to FLAC.
@@ -129,7 +130,7 @@ export class MeetingRecorder implements Recorder {
     const raw = join(this.cfg.paths.partialDir, `${base}.oa.wav`); // ownscribe's merged output (24 kHz float)
     const logFd = openSync(join(this.cfg.paths.logsDir, `${base}.log`), "a");
     const proc = Bun.spawn(
-      [this.cfg.ownscribeBin, "capture", "-o", raw, "--mic", "--capture-mode-all",
+      [this.cfg.ownscribeBin, "capture", "-o", raw, "--mic", "--capture-mode-all", "--keep-tracks",
         "--max-duration", String(this.cfg.maxDurationSeconds)],
       { cwd: this.cfg.meetingsBase, env: { ...process.env, PATH: this.cfg.childPath }, stdin: "ignore", stdout: logFd, stderr: logFd },
     );
@@ -222,7 +223,8 @@ export class MeetingRecorder implements Recorder {
     const stageFlac = join(stageFolder, CANONICAL_RECORDING);
     rmSync(stageFolder, { recursive: true, force: true }); // clear any stale staging folder
     mkdirSync(stageFolder, { recursive: true });
-    if (!(await transcodeToFlac16k(this.cfg, capture, stageFlac))) {
+    const source = st.backend === "ownscribe" ? await this.cancelEcho(st, capture) : capture;
+    if (!(await transcodeToFlac16k(this.cfg, source, stageFlac))) {
       rmSync(stageFolder, { recursive: true, force: true });
       // Keep the raw capture (and, via the caller, the state) so finalize retries — never lose
       // the only copy of the meeting on a transient ffmpeg hiccup. No cleanupTemps here.
@@ -244,6 +246,37 @@ export class MeetingRecorder implements Recorder {
     }
     this.cleanupTemps(st);
     return { status: "moved", path: join(dest, CANONICAL_RECORDING) };
+  }
+
+  /** ownscribe only: if --keep-tracks produced separate sys/mic tracks, run asr/aec.py to
+   *  cancel system-audio echo out of the mic before transcoding. Returns the file to transcode
+   *  — the aec output on success, otherwise the original (gated) merge. Never throws: an aec
+   *  failure just falls back, it must never fail finalize. */
+  private async cancelEcho(st: RecordingState, capture: string): Promise<string> {
+    const sys = `${capture}.sys.wav`;
+    const mic = `${capture}.mic.wav`;
+    const aec = `${capture}.aec.wav`;
+    const nonEmpty = (f: string) => existsSync(f) && statSync(f).size > 0;
+    if (!nonEmpty(sys) || !nonEmpty(mic)) return capture;
+    try {
+      const script = join(this.cfg.repoDir, "asr", "aec.py");
+      const proc = Bun.spawn([this.cfg.pythonBin, script, sys, mic, aec], {
+        env: { ...process.env, PATH: this.cfg.childPath },
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "pipe",
+      });
+      const code = await proc.exited;
+      if (code === 0 && nonEmpty(aec)) {
+        log.info("recorder", `${st.base}: echo-cancelled mic (aec.py)`);
+        return aec;
+      }
+      const stderr = (await new Response(proc.stderr).text()).slice(-300);
+      log.warn("recorder", `${st.base}: aec.py failed (${code}) — using gated merge: ${stderr}`);
+    } catch (err) {
+      log.warn("recorder", `${st.base}: aec.py errored — using gated merge: ${String(err)}`);
+    }
+    return capture;
   }
 
   /** Recover a stray raw capture (meeting-<stamp>.wav, PCM) left in .partial/ when state was lost
@@ -302,7 +335,7 @@ export class MeetingRecorder implements Recorder {
       try { if (existsSync(p.file)) unlinkSync(p.file); } catch {}
       // ownscribe-audio's own temp tracks, in case it died before cleaning them up itself.
       if (st.backend === "ownscribe") {
-        for (const suffix of [".sys.tmp.wav", ".mic.tmp.wav"]) {
+        for (const suffix of [".sys.tmp.wav", ".mic.tmp.wav", ".sys.wav", ".mic.wav", ".aec.wav"]) {
           try { if (existsSync(p.file + suffix)) unlinkSync(p.file + suffix); } catch {}
         }
       }
