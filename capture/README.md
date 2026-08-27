@@ -46,17 +46,14 @@ and stops it with SIGINT, then ffmpeg-transcodes the result to 16 kHz s16le.
    supervisor that forwards stop/mute signals (SIGINT/SIGTERM/SIGUSR1) so the recorder's
    pid-tracking and SIGINT-merge-on-stop are unaffected.
 
-5. **Echo cancellation** of speaker audio from the mic. On speakers the mic re-captures the
-   system audio 30–100 ms late (output + input latency, which changes with devices and OS
-   updates), so the merged file carried a second delayed copy of every remote word — host-time
-   sync of the two tracks can't remove that. The mic runs through macOS's voice-processing IO
-   (`AVAudioInputNode.setVoiceProcessingEnabled`), which cancels the device output from the mic
-   signal (~35 dB in testing) and applies noise suppression. Two consequences: the processed input
-   comes out as 9 identical channels, so the mic track is written mono from channel 0; and macOS
-   **ducks other apps by ~8 dB while voice processing is active** (the `.min` ducking level is the
-   floor — there is no off switch), so the meeting sounds quieter to you while a recording runs.
-   If voice processing fails to start the capture falls back to the plain mic and logs a warning;
-   `--no-aec` disables it explicitly.
+5. **Mic gate** against speaker echo. On speakers the mic re-captures the system audio
+   30–100 ms late (output + input latency, which changes with devices and OS updates), so the
+   merged file carried a second delayed copy of every remote word — host-time sync of the two
+   tracks can't remove that. At merge time the mic track is muted (20 ms blocks, 60 ms pre-roll,
+   300 ms hangover, click-free ramp) wherever the system track is above −40 dBFS, so remote speech
+   comes only from the clean system tap. It runs offline and touches nothing on the live audio path —
+   macOS voice-processing AEC was tried first and silenced the mic for Teams. Cost: your own words
+   spoken *over* the remote party are muted too. `--no-mic-gate` disables it.
 
 Because the disclaimed binary is self-responsible, it needs its **own** TCC grants (not the
 launcher's): grant once via **`murmur grant-mic`** (Microphone) and by enabling `ownscribe-audio`
@@ -83,7 +80,7 @@ fails — `build.sh`'s direct `swiftc` call is the real, supported build path.
   and opens an issue when upstream moves past the pinned commit. Delete it if unwanted.
 
 `LICENSE` tracks upstream verbatim. `Sources/AudioCapture.swift` carries the local
-`--max-duration`, `request-mic`, `watch-mic`, self-disclaim, and echo-cancellation patches and `build.sh` deviates on
+`--max-duration`, `request-mic`, `watch-mic`, self-disclaim, and mic-gate patches and `build.sh` deviates on
 `BIN_DIR` + the `Info.plist` embedding + stable code-signing, so after a sync **re-apply the patches**
 (search `LOCAL PATCH`); `scripts/sync-capture.sh` warns about this on `--apply`. If the `--max-duration`
 patch is ever lost, `murmur record` fails loudly with `Unknown option: --max-duration` rather than

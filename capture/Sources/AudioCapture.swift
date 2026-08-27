@@ -14,6 +14,47 @@ import IOKit.pwr_mgt
 private let kMicLoudThreshold: Float = 1e-2
 /// Minimum peak amplitude to consider system audio "loud" (silence timeout).
 private let kSystemLoudThreshold: Float = 1e-4
+
+// LOCAL PATCH (5): mic gate. On speakers the mic re-captures the system audio 30–100 ms late
+// (output + input latency; varies with devices and OS updates), so the merged file carried a
+// second delayed copy of every remote word. At merge time the mic track is muted wherever the
+// system track is loud — remote speech then comes only from the clean system tap. Runs offline,
+// touches nothing on the live audio path (voice-processing AEC broke the mic for Teams).
+// ponytail: fixed threshold + half-duplex gate; a real AEC (NLMS against the system track) if
+// interjections over the remote party turn out to matter.
+private let kMicGateBlockFrames = 480          // 20 ms at 24 kHz
+private let kMicGateThresholdRMS: Float = 0.01 // -40 dBFS on the system track
+private let kMicGatePreBlocks = 3              // 60 ms before system audio starts
+private let kMicGateHangBlocks = 15            // 300 ms after it stops (covers echo lag + room)
+
+/// Per-20 ms-block "system audio is loud" map over the system file, dilated for pre-roll/hangover.
+func micGateMap(_ file: AVAudioFile) throws -> [Bool] {
+    let blocks = Int((file.length + Int64(kMicGateBlockFrames) - 1) / Int64(kMicGateBlockFrames))
+    var loud = [Bool](repeating: false, count: blocks)
+    file.framePosition = 0
+    let cap = AVAudioFrameCount(kMicGateBlockFrames * 512)
+    guard let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: cap) else { return loud }
+    let ch = Int(file.processingFormat.channelCount)
+    var block = 0
+    while file.framePosition < file.length {
+        try file.read(into: buf, frameCount: cap)
+        let n = Int(buf.frameLength); guard n > 0, let data = buf.floatChannelData else { break }
+        var i = 0
+        while i < n && block < blocks {
+            let end = min(i + kMicGateBlockFrames, n)
+            var sumsq: Float = 0
+            for j in i..<end { var m: Float = 0; for c in 0..<ch { m += data[c][j] }; m /= Float(ch); sumsq += m * m }
+            if (sumsq / Float(end - i)).squareRoot() > kMicGateThresholdRMS { loud[block] = true }
+            block += 1; i = end
+        }
+    }
+    var gate = loud
+    for (b, isLoud) in loud.enumerated() where isLoud {
+        for d in max(0, b - kMicGatePreBlocks)...min(blocks - 1, b + kMicGateHangBlocks) { gate[d] = true }
+    }
+    file.framePosition = 0
+    return gate
+}
 /// System audio capture and merge output sample rate (mono float32).
 private let kSystemAudioSampleRate: Double = 24000
 
@@ -65,22 +106,8 @@ class MicCapture {
         fputs(muted ? "[MIC_MUTED]\n" : "[MIC_UNMUTED]\n", stderr)
     }
 
-    func start(outputPath: String, deviceName: String?, aec: Bool = true) throws {
+    func start(outputPath: String, deviceName: String?) throws {
         let input = engine.inputNode
-
-        // LOCAL PATCH (5): acoustic echo cancellation. On speakers the mic re-captures the
-        // system audio 30–100 ms late (output + input latency, varies per device/OS), so the
-        // merged file carries an echo that host-time sync can't remove. macOS's voice-processing
-        // IO cancels the device output from the mic signal instead (~35 dB measured). Side effect:
-        // macOS ducks other apps while voice processing runs; .min is the floor (~-8 dB, no off
-        // switch — the legacy kAUVoiceIOProperty_DuckNonVoiceAudio is rejected). Escape hatch: --no-aec.
-        if aec {
-            try input.setVoiceProcessingEnabled(true)
-            if #available(macOS 14.0, *) {
-                input.voiceProcessingOtherAudioDuckingConfiguration =
-                    AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
-            }
-        }
 
         // If deviceName specified, find and set the audio device
         if let name = deviceName {
@@ -100,25 +127,15 @@ class MicCapture {
         guard format.sampleRate > 0 else {
             throw MicError.noInputAvailable
         }
-        // Mono file: voice processing exposes the mic as 9 identical channels; keep channel 0.
-        let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate,
-                                       channels: 1, interleaved: false)!
 
         let url = URL(fileURLWithPath: outputPath)
         audioFile = try AVAudioFile(forWriting: url,
-                                     settings: monoFormat.settings,
+                                     settings: format.settings,
                                      commonFormat: .pcmFormatFloat32,
                                      interleaved: true)
 
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] tapBuffer, time in
+        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, time in
             guard let self else { return }
-            var buffer = tapBuffer
-            if tapBuffer.format.channelCount > 1, let src = tapBuffer.floatChannelData,
-               let mono = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: tapBuffer.frameLength) {
-                mono.frameLength = tapBuffer.frameLength
-                memcpy(mono.floatChannelData![0], src[0], Int(tapBuffer.frameLength) * MemoryLayout<Float>.size)
-                buffer = mono
-            }
             if self.startHostTime == 0 {
                 self.startHostTime = time.hostTime
             }
@@ -588,7 +605,7 @@ func listInputDevices() {
 
 func mergeAudioFiles(systemPath: String, micPath: String,
                      systemStartHostTime: UInt64, micStartHostTime: UInt64,
-                     outputPath: String) throws {
+                     outputPath: String, micGate: Bool = true) throws {
     // A standard WAV file header (RIFF + fmt + data chunk header) is 44 bytes.
     // Files at or below this size contain no audio frames.
     let wavHeaderSize = 44
@@ -660,6 +677,15 @@ func mergeAudioFiles(systemPath: String, micPath: String,
     let micOutputStart: Int64 = (offsetFrames >= 0) ? offsetFrames : 0
     let micOutputEnd: Int64 = micOutputStart + micLengthOutput
     var micDone = false
+
+    // Mic gate (LOCAL PATCH 5): mute the mic while the system track is loud. Indexed by system-file
+    // frame; micGain is one-pole smoothed (~8 ms) so the gate doesn't click.
+    let gateMap: [Bool] = (micGate && systemFile != nil) ? try micGateMap(systemFile!) : []
+    var micGain: Float = 1
+    if !gateMap.isEmpty {
+        let pct = 100 * gateMap.filter { $0 }.count / max(1, gateMap.count)
+        fputs("Mic gate: system audio loud in \(pct)% of the recording — mic muted there\n", stderr)
+    }
 
     var outputFrame: Int64 = 0
 
@@ -741,7 +767,13 @@ func mergeAudioFiles(systemPath: String, micPath: String,
                     let srcPtr = micOutBuf.floatChannelData![0]
                     let count = Int(micOutBuf.frameLength * outputChannels)
                     for i in 0..<count {
-                        outPtr[offsetInChunk * Int(outputChannels) + i] += srcPtr[i]
+                        if !gateMap.isEmpty {
+                            let sysFrame = (offsetFrames >= 0) ? overlapStart + Int64(i) : overlapStart + Int64(i) + offsetFrames
+                            let block = Int(sysFrame / Int64(kMicGateBlockFrames))
+                            let gated = sysFrame >= 0 && block < gateMap.count && gateMap[block]
+                            micGain += ((gated ? 0 : 1) - micGain) * 0.005
+                        }
+                        outPtr[offsetInChunk * Int(outputChannels) + i] += srcPtr[i] * micGain
                     }
                 }
             }
@@ -781,7 +813,7 @@ func printUsage() {
         --output, -o FILE    Output WAV file path (required for capture)
         --mic                Also capture microphone input
         --mic-device NAME    Use specific mic input device (implies --mic)
-        --no-aec             Disable echo cancellation of speaker audio from the mic (on by default)
+        --no-mic-gate        Keep the mic audible while system audio plays (default: muted there, kills speaker echo)
         --capture-mode-all   Capture all system audio without showing the source picker
         --silence-timeout N  Auto-stop after N seconds of silence (0 = disabled)
         --max-duration N     Auto-stop after N seconds total (0 = disabled)
@@ -1036,7 +1068,7 @@ func main() {
         var outputPath: String?
         var enableMic = false
         var micDeviceName: String?
-        var aec = true
+        var micGate = true
         var captureModeAll = false
         var silenceTimeout: TimeInterval = 0
         var maxDuration: TimeInterval = 0
@@ -1053,8 +1085,8 @@ func main() {
                 outputPath = args[i]
             case "--capture-mode-all":
                 captureModeAll = true
-            case "--no-aec":
-                aec = false
+            case "--no-mic-gate":
+                micGate = false
             case "--mic":
                 enableMic = true
             case "--mic-device":
@@ -1111,16 +1143,9 @@ func main() {
         var micCapture: MicCapture?
 
         if enableMic {
-            var mic = MicCapture()
+            let mic = MicCapture()
             do {
-                do {
-                    try mic.start(outputPath: micPath, deviceName: micDeviceName, aec: aec)
-                } catch where aec {
-                    // Never lose a recording to the echo canceller: fall back to the plain mic.
-                    fputs("warning: echo cancellation unavailable (\(error)) — recording mic without it\n", stderr)
-                    mic = MicCapture()
-                    try mic.start(outputPath: micPath, deviceName: micDeviceName, aec: false)
-                }
+                try mic.start(outputPath: micPath, deviceName: micDeviceName)
             } catch {
                 fputs("Error starting mic capture: \(error)\n", stderr)
                 exit(1)
@@ -1140,7 +1165,7 @@ func main() {
                         micPath: micPath,
                         systemStartHostTime: capture.startHostTime,
                         micStartHostTime: mic.startHostTime,
-                        outputPath: output)
+                        outputPath: output, micGate: micGate)
                 } catch {
                     fputs("Error merging audio: \(error)\n", stderr)
                 }
