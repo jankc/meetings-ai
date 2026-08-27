@@ -10,7 +10,7 @@ import { move, currentAudioFor } from "./recordings.ts";
 import type { Recorder } from "./recorder.ts";
 import { PauseStore, writeCurrent, clearCurrent, readCurrent } from "./jobstate.ts";
 import { transcribe } from "./engines/asr.ts";
-import { summarize, EMPTY_MARKER } from "./engines/ollama.ts";
+import { summarize, EMPTY_MARKER } from "./engines/summary.ts";
 import { archiveSummary } from "./archive.ts";
 import { EngineError, isAbort } from "./engines/errors.ts";
 import { logFailure } from "./failures.ts";

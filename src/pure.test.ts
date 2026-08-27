@@ -6,7 +6,7 @@ import { parseStamp, stampFromDate, monthOf } from "./stamp.ts";
 import { truthy, parseNum } from "./util.ts";
 import { titleFromSummary, sanitizeTitle } from "./archive.ts";
 import { isRecordingFile, stripAudioExt } from "./paths.ts";
-import { wordCount, parseTriage } from "./engines/ollama.ts";
+import { wordCount, parseTriage } from "./engines/summary.ts";
 import { classifyTranscript } from "./purge.ts";
 
 describe("stamp", () => {

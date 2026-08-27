@@ -2,7 +2,7 @@
 // when context is non-empty, sits between the type prompt and the transcript, and never leaves
 // empty delimiters when absent. No Ollama/network — assembleSummaryPrompt is pure.
 import { test, expect, describe } from "bun:test";
-import { assembleSummaryPrompt, CONTEXT_OPEN, CONTEXT_CLOSE } from "./engines/ollama.ts";
+import { assembleSummaryPrompt, CONTEXT_OPEN, CONTEXT_CLOSE } from "./engines/summary.ts";
 
 const PARTS = {
   baseRules: "BASE RULES",

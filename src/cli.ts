@@ -12,7 +12,7 @@ import { resolveContext, saveContext } from "./context.ts";
 import { runDaemon } from "./daemon.ts";
 import { MeetingRecorder } from "./recorder.ts";
 import { transcribe } from "./engines/asr.ts";
-import { summarize } from "./engines/ollama.ts";
+import { summarize } from "./engines/summary.ts";
 import { archiveSummary } from "./archive.ts";
 import { type QueueItem } from "./queue.ts";
 import { resolveWav, folderAudio, recordingBase, isManagedRecording, move } from "./recordings.ts";

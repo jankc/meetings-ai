@@ -9,7 +9,7 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { Config } from "./config.ts";
-import { generateTitle, EMPTY_MARKER, type TriageType } from "./engines/ollama.ts";
+import { generateTitle, EMPTY_MARKER, type TriageType } from "./engines/summary.ts";
 import { isAbort } from "./engines/errors.ts";
 import { parseStamp, stampFromDate } from "./stamp.ts";
 import { folderAudio } from "./recordings.ts";

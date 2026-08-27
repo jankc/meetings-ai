@@ -6,7 +6,7 @@ import { readdirSync, type Dirent } from "node:fs";
 import { rm, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
-import { wordCount, stripTranscriptMarkup, EMPTY_MARKER, MIN_WORDS } from "./engines/ollama.ts";
+import { wordCount, stripTranscriptMarkup, EMPTY_MARKER, MIN_WORDS } from "./engines/summary.ts";
 import { ARTIFACTS } from "./paths.ts";
 import { parseStamp } from "./stamp.ts";
 import { log } from "./log.ts";

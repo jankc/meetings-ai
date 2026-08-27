@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveContext, saveContext } from "./context.ts";
 import { ARTIFACTS } from "./paths.ts";
-import { assembleSummaryPrompt, CONTEXT_OPEN } from "./engines/ollama.ts";
+import { assembleSummaryPrompt, CONTEXT_OPEN } from "./engines/summary.ts";
 
 const dirs: string[] = [];
 function tmp(): string {
