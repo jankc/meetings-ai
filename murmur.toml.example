@@ -17,9 +17,15 @@ meetings_base = "~/Recordings/Meetings"
 # process_timeout_seconds = 7200   # per-stage wall-clock backstop (kills a wedged ASR/ollama job)
 
 [summary]
-model = "gemma3:12b"               # any Ollama chat model. NOTE: *-mlx tags (e.g. gemma4:26b-mlx)
+# provider = "ollama"              # ollama | omlx — which local LLM server does the summarizing
+model = "gemma3:12b"               # ollama: any chat model. NOTE: *-mlx tags (e.g. gemma4:26b-mlx)
                                    # are custom LOCAL MLX builds, not pullable — `ollama create` them.
+                                   # omlx: an MLX model id, e.g. "unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit"
+                                   # (oMLX resolves the HF id to its discovered local model).
 # ollama_host = "http://localhost:11434"   # set if ollama is remote or on a non-default port
+# omlx_base_url = "http://localhost:8000/v1"   # oMLX's OpenAI-compatible base URL (incl. /v1)
+# omlx_api_key = ""                # if the oMLX server requires auth — or export OMLX_API_KEY in
+                                   # the daemon's env instead of storing it here (env wins)
 # prompts_dir = ""                 # empty = repo prompts/ — holds base.md, triage.md and
                                    # types/<type>.md (summary, dictation, list, journal, lecture).
                                    # A triage call routes each recording to the matching template;

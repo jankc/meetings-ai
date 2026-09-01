@@ -1,6 +1,6 @@
 # murmur
 
-Local meeting recorder, transcriber, and summarizer for macOS. Captures system audio **and** your mic (recommended backend: [`ownscribe`](#recording-backends) — a ScreenCaptureKit tap on the default output, so it never reroutes audio or disables the volume keys), transcribes with `mlx-whisper` (+ optional `pyannote` speaker diarization), and summarizes with a local LLM via `ollama`. Everything runs locally — no cloud, no third parties.
+Local meeting recorder, transcriber, and summarizer for macOS. Captures system audio **and** your mic (recommended backend: [`ownscribe`](#recording-backends) — a ScreenCaptureKit tap on the default output, so it never reroutes audio or disables the volume keys), transcribes with `mlx-whisper` (+ optional `pyannote` speaker diarization), and summarizes with a local LLM via `ollama` (or an oMLX server — `[summary].provider = "omlx"`). Everything runs locally — no cloud, no third parties.
 
 One stack: a single [Bun](https://bun.sh)/TypeScript codebase in `src/` provides both the **`murmur` CLI** (manual control) and a long-lived **daemon** (automatic, GPU-pause-aware processing). They share the same modules, so every step has one implementation.
 
@@ -55,6 +55,8 @@ meetings_base = "~/Recordings/Meetings"
 
 [summary]
 model = "gemma3:12b"        # any Ollama chat model (the *-mlx tags are custom local builds)
+# provider = "omlx"         # summarize via an oMLX server instead of Ollama (OpenAI-compatible
+# omlx_api_key = "..."      # endpoint; model becomes an MLX/HF id, base URL + key in the example)
 
 [asr]
 diarize = true              # speaker labels (see Diarization below)
@@ -82,7 +84,7 @@ murmur summarize <name>      # summarize a transcript → prints summary path
 murmur status [--json] [--watch [secs]]  # recording / pause / queue / failures (--json for tools; --watch for a live view, default 2s)
 murmur pause [hard]          # pause processing (soft = finish current; hard = abort + requeue)
 murmur resume
-murmur doctor                # verify setup (venv, ffmpeg, ollama+model, ownscribe, …)
+murmur doctor                # verify setup (venv, ffmpeg, summary LLM+model, ownscribe, …)
 murmur logs [-f]             # tail the daemon logs (-f to follow)
 murmur daemon <sub>          # run | start | stop | restart | install — manage the LaunchAgent
 ```
@@ -227,7 +229,7 @@ Archiving replaces any prior note for the same recording (matched on the `YYYY-M
 - **ffmpeg backend:** recording downmixes the 3-channel Aggregate Device to mono with a `pan=` filter (default in `src/config.ts`): `c0+c1` = BlackHole 2ch (system audio — the other participants), `c2` = the microphone (your voice). If your Aggregate Device orders its sub-devices differently, set `[recording].pan_filter` in `murmur.toml` — a wrong channel map is the usual reason a capture comes out mute or lopsided.
 - On `stop`, murmur measures the finished recording's level and warns (notification + log) if it's effectively silent. Usual causes: a routing slip (e.g. system output not on the BlackHole multi-output on the `ffmpeg` backend) or a muted/grabbed mic. Threshold: `[recording].silence_db` (default `-80` dBFS).
 - The `asr/asr.py` helper reads the recording read-only and prints its result (transcript chunks + speaker turns) as JSON on stdout, so murmur writes straight to `<base>/transcript.txt` in the recording's folder. Your recordings are never mutated.
-- Per-recording diagnostics travel with the recording, inside its folder: asr → `<base>/asr.log` (the helper's stderr — model load + progress + a failure's tail; stdout carries the JSON payload murmur parses), and an ollama failure → `<base>/summary.error.log` (the failing response body). Global daemon logs stay under `logs/`: the recorder's capture log (`meeting-<ts>.log`) and the daemon's own stdout/stderr (`daemon.{out,err}.log`, via `murmur logs`).
+- Per-recording diagnostics travel with the recording, inside its folder: asr → `<base>/asr.log` (the helper's stderr — model load + progress + a failure's tail; stdout carries the JSON payload murmur parses), and a summary-LLM failure → `<base>/summary.error.log` (the failing response body). Global daemon logs stay under `logs/`: the recorder's capture log (`meeting-<ts>.log`) and the daemon's own stdout/stderr (`daemon.{out,err}.log`, via `murmur logs`).
 - Summaries use `temperature: 0` for reliable, deterministic instruction-following.
 - **Per-type summaries.** Before summarizing, a quick triage call classifies each recording and routes it to a matching template in `prompts/` (`base.md` holds the shared rules; `types/<type>.md` the body): `summary` (the default — meetings, notes, conversations, anything ambiguous), `dictation` (returns the cleaned-up dictated text), `list` (items verbatim), `journal` (reflection, no imposed tasks), `lecture` (knowledge capture for talks/podcasts/interviews). Triage reuses `[summary].model`; edit the files to tweak any treatment. Output is Czech or English (mirrors the recording; any other apparent language is treated as a mis-transcription → Czech).
 - Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `recording.json`, `daemon.lock`) — inspectable, persistent across restarts. Failures are logged to `$MEETINGS_BASE/logs/process-failures.log`.

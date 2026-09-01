@@ -22,8 +22,11 @@ export interface Config {
   diarize: boolean;
   numSpeakers: number; // hint for diarization; 0 = auto-detect
   hfToken: string;
-  // ollama (summarization)
+  // summarization LLM — provider picks the transport (see engines/llm.ts)
+  summaryProvider: "ollama" | "omlx";
   ollamaHost: string;
+  omlxBaseUrl: string; // OpenAI-compatible base URL incl. /v1 (oMLX default port 8000)
+  omlxApiKey: string; // empty = no Authorization header
   modelSummary: string;
   promptsDir: string; // dir holding base.md, triage.md, types/<type>.md
   // Obsidian vault archiving (optional — empty vaultRoot disables it)
@@ -59,7 +62,10 @@ const REPO_DIR = join(import.meta.dir, "..");
 // Config (configAsEnv). The matching env-var name is the override for each.
 const KEYS = [
   "MEETINGS_BASE",
+  "SUMMARY_PROVIDER",
   "MODEL_SUMMARY",
+  "OMLX_BASE_URL",
+  "OMLX_API_KEY",
   "MURMUR_PORT",
   "MURMUR_PYTHON",
   "ASR_MODEL",
@@ -104,6 +110,10 @@ function pickBackend(v: string): Config["recordBackend"] {
   return v === "ownscribe" ? v : "ffmpeg";
 }
 
+function pickProvider(v: string): Config["summaryProvider"] {
+  return v === "omlx" ? v : "ollama";
+}
+
 type RawEnv = Partial<Record<(typeof KEYS)[number], string>>;
 
 // murmur.toml uses grouped, idiomatic tables; map them onto the flat KEYS used throughout
@@ -121,7 +131,10 @@ function tomlToRawEnv(toml: Record<string, any>): RawEnv {
   const list = (v: unknown) => (Array.isArray(v) ? v.join(",") : v);
   const mapping: Record<(typeof KEYS)[number], unknown> = {
     MEETINGS_BASE: path(toml.meetings_base),
+    SUMMARY_PROVIDER: summary.provider,
     MODEL_SUMMARY: summary.model,
+    OMLX_BASE_URL: summary.omlx_base_url,
+    OMLX_API_KEY: summary.omlx_api_key,
     MURMUR_PORT: toml.port,
     MURMUR_PYTHON: path(asr.python),
     ASR_MODEL: asr.model,
@@ -209,7 +222,10 @@ export function loadConfig(repoDir: string = REPO_DIR): Config {
     diarize: truthy(pick("DIARIZE", "0")),
     numSpeakers: num("DIARIZE_NUM_SPEAKERS", 0),
     hfToken: pick("HF_TOKEN", ""),
+    summaryProvider: pickProvider(pick("SUMMARY_PROVIDER", "ollama")),
     ollamaHost: pick("OLLAMA_HOST", "http://localhost:11434"),
+    omlxBaseUrl: pick("OMLX_BASE_URL", "http://localhost:8000/v1"),
+    omlxApiKey: pick("OMLX_API_KEY", ""),
     modelSummary: pick("MODEL_SUMMARY", "gemma4:26b-mlx"),
     promptsDir: pick("PROMPTS_DIR", join(repoDir, "prompts")),
     vaultRoot: pick("OBSIDIAN_VAULT", ""),
@@ -243,7 +259,10 @@ export function loadConfig(repoDir: string = REPO_DIR): Config {
 export function configAsEnv(cfg: Config): Record<string, string> {
   const all: Record<(typeof KEYS)[number], string> = {
     MEETINGS_BASE: cfg.meetingsBase,
+    SUMMARY_PROVIDER: cfg.summaryProvider,
     MODEL_SUMMARY: cfg.modelSummary,
+    OMLX_BASE_URL: cfg.omlxBaseUrl,
+    OMLX_API_KEY: cfg.omlxApiKey,
     MURMUR_PORT: String(cfg.port),
     MURMUR_PYTHON: cfg.pythonBin,
     ASR_MODEL: cfg.asrModel,

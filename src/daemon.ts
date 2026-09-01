@@ -95,7 +95,7 @@ export async function runDaemon(cfg: Config): Promise<void> {
 async function selfCheck(cfg: Config): Promise<void> {
   const diarize = cfg.diarize && !!cfg.hfToken;
   log.info("daemon", `asr model=${cfg.asrModel} lang=${cfg.language} diarize=${diarize}${diarize && cfg.numSpeakers ? ` num_speakers=${cfg.numSpeakers}` : ""}`);
-  log.info("daemon", `ollama: ${cfg.ollamaHost} model=${cfg.modelSummary}`);
+  log.info("daemon", `summary provider=${cfg.summaryProvider} host=${cfg.summaryProvider === "omlx" ? cfg.omlxBaseUrl : cfg.ollamaHost} model=${cfg.modelSummary}`);
   log.info("daemon", `recorder backend=${cfg.recordBackend}${cfg.recordBackend === "ffmpeg" ? ` device index=${cfg.recordDeviceIndex}` : ""}`);
   // Shared with `murmur doctor`; the daemon only logs (it doesn't refuse to start).
   for (const c of await runChecks(cfg)) {

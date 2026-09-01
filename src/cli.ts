@@ -303,7 +303,7 @@ Usage: murmur <command> [args]
   status [--json] [--watch] recording / pause / queue / failures (--json for tools; --watch [secs] for a live view)
   pause [hard]             pause processing (soft = finish current; hard = abort + requeue)
   resume                   resume processing
-  doctor                   check setup (venv, ffmpeg, ollama+model, ownscribe, …) → non-zero on problems
+  doctor                   check setup (venv, ffmpeg, summary LLM+model, ownscribe, …) → non-zero on problems
   logs [failures|import] [-f]  tail daemon logs (or process-failures.log / import logs); -f to follow
   daemon <sub>             run | start | stop | restart | install (manage the LaunchAgent)
   print-env                resolved config as shell exports (used by run-daemon.sh)

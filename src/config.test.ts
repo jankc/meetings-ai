@@ -15,7 +15,8 @@ const HOME = process.env.HOME ?? "";
 // Every key loadConfig reads from the environment. Cleared around each test so an exported
 // MEETINGS_BASE (etc.) in the dev shell can't make a "toml value wins" assertion flaky.
 const ENV_KEYS = [
-  "MEETINGS_BASE", "MODEL_SUMMARY", "MURMUR_PORT", "MURMUR_PYTHON", "ASR_MODEL", "ASR_LANG",
+  "MEETINGS_BASE", "SUMMARY_PROVIDER", "MODEL_SUMMARY", "OMLX_BASE_URL", "OMLX_API_KEY",
+  "MURMUR_PORT", "MURMUR_PYTHON", "ASR_MODEL", "ASR_LANG",
   "DIARIZE", "DIARIZE_NUM_SPEAKERS", "HF_TOKEN", "OLLAMA_HOST", "PROMPTS_DIR", "RECORD_BACKEND",
   "RECORD_DEVICE_INDEX", "OWNSCRIBE_BIN", "MAX_DURATION_SECONDS", "PROCESS_TIMEOUT_SECONDS",
   "RECORD_PAN_FILTER", "RECORD_SILENCE_DB", "OBSIDIAN_VAULT", "VAULT_FOLDER",
@@ -95,11 +96,31 @@ silence_db = -40
     try {
       const cfg = loadConfig(dir);
       expect(cfg.asrModel).toBe("mlx-community/whisper-large-v3-turbo");
+      expect(cfg.summaryProvider).toBe("ollama");
       expect(cfg.ollamaHost).toBe("http://localhost:11434");
+      expect(cfg.omlxBaseUrl).toBe("http://localhost:8000/v1");
+      expect(cfg.omlxApiKey).toBe("");
       expect(cfg.vaultRoot).toBe(""); // empty → archiving disabled
       expect(cfg.vaultFolder).toBe("Murmur");
       expect(cfg.maxDurationSeconds).toBe(7200);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("[summary] provider/omlx keys map onto Config (unknown provider falls back to ollama)", () => {
+    const dir = tmpRepo({
+      "murmur.toml": `meetings_base = "/p"\n[summary]\nmodel = "m"\nprovider = "omlx"\nomlx_base_url = "http://box:9000/v1"\nomlx_api_key = "sekret"\n`,
+    });
+    try {
+      const cfg = loadConfig(dir);
+      expect(cfg.summaryProvider).toBe("omlx");
+      expect(cfg.omlxBaseUrl).toBe("http://box:9000/v1");
+      expect(cfg.omlxApiKey).toBe("sekret");
+      process.env.SUMMARY_PROVIDER = "nonsense";
+      expect(loadConfig(dir).summaryProvider).toBe("ollama"); // guarded like record backend
+    } finally {
+      delete process.env.SUMMARY_PROVIDER;
       rmSync(dir, { recursive: true, force: true });
     }
   });

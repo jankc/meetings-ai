@@ -57,19 +57,35 @@ export async function runChecks(cfg: Config): Promise<Check[]> {
     }
   }
 
-  const ollamaUp = await fetch(`${cfg.ollamaHost}/api/tags`, { signal: AbortSignal.timeout(2000) })
-    .then((r) => r.ok)
-    .catch(() => false);
-  add("ollama reachable", ollamaUp, cfg.ollamaHost);
-  if (ollamaUp) {
-    const present = await fetch(`${cfg.ollamaHost}/api/show`, {
-      method: "POST",
-      body: JSON.stringify({ name: cfg.modelSummary }),
-      signal: AbortSignal.timeout(3000),
-    })
+  if (cfg.summaryProvider === "omlx") {
+    // oMLX: one authenticated /models call covers reachability AND the model list.
+    const headers = cfg.omlxApiKey ? { authorization: `Bearer ${cfg.omlxApiKey}` } : undefined;
+    const models = await fetch(`${cfg.omlxBaseUrl}/models`, { headers, signal: AbortSignal.timeout(3000) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => (d as { data?: { id?: string }[] } | null)?.data ?? null)
+      .catch(() => null);
+    add("omlx reachable", models !== null, `${cfg.omlxBaseUrl} — start the oMLX server (check omlx_api_key too)`);
+    if (models !== null) {
+      const present = models.some((m) => m.id === cfg.modelSummary);
+      // warn only: oMLX resolves HF ids to discovered local models, so an exact-id miss can still work.
+      add(`model ${cfg.modelSummary}`, present,
+        present ? "available" : "not in /models — oMLX may still resolve the HF id at request time", "warn");
+    }
+  } else {
+    const ollamaUp = await fetch(`${cfg.ollamaHost}/api/tags`, { signal: AbortSignal.timeout(2000) })
       .then((r) => r.ok)
       .catch(() => false);
-    add(`model ${cfg.modelSummary}`, present, present ? "available" : "not pulled — `ollama pull` or `ollama create` it");
+    add("ollama reachable", ollamaUp, cfg.ollamaHost);
+    if (ollamaUp) {
+      const present = await fetch(`${cfg.ollamaHost}/api/show`, {
+        method: "POST",
+        body: JSON.stringify({ name: cfg.modelSummary }),
+        signal: AbortSignal.timeout(3000),
+      })
+        .then((r) => r.ok)
+        .catch(() => false);
+      add(`model ${cfg.modelSummary}`, present, present ? "available" : "not pulled — `ollama pull` or `ollama create` it");
+    }
   }
 
   if (cfg.diarize) {
